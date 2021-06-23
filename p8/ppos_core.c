@@ -184,25 +184,28 @@ int task_getprio (task_t *task){
 int task_join (task_t *task){
   if(task == NULL) return 1;
 
-  task->request_join = 1;
-  // atualiza o estado da tarefa para suspenso
+  // flag que indica que a tarefa pediu um join
+  task->request_join++;
+
+  // tarefa atual é suspensa, id de quem pediu join é guardado
   curr_task->suspended = task->id;
+  queue_remove((queue_t **)&task_queue, (queue_t *)curr_task);
+  queue_append((queue_t **)&suspended_queue, (queue_t *)curr_task);
+
+  // fluxo volta para o dispatcher
   task_yield();
+
   int code = curr_task->request_join;
   curr_task->request_join = 0;
+  curr_task->suspended = 0;
   return code;
 }
 
 // fluxo retorna para o dispatcher
 void task_yield(){
 
-  if(curr_task->suspended){
-    // adiciona a tarefa corrente na fila de suspensas
-    queue_remove((queue_t **)&task_queue, (queue_t *)&curr_task);
-    queue_append((queue_t **)&suspended_queue, (queue_t *)&curr_task);
-  }
-  // Se a tarefa atual for de usuário e não tiver sido suspensa, colocamos-a no final da fila
-  else{
+  if(curr_task->suspended == 0){
+    // Se a tarefa atual for de usuário e não tiver sido suspensa, colocamos-a no final da fila
     if(task_queue != NULL) queue_remove((queue_t **)&task_queue, (queue_t *)curr_task);
     queue_append((queue_t **)&task_queue, (queue_t *)curr_task);
   }
@@ -268,17 +271,30 @@ void task_exit (int exitCode){
 
   if(curr_task == &dispatcher) return;
 
-  // acorda as tarefas suspensas
-  if(curr_task->request_join){
-    task_t *aux = suspended_queue;
-    while(queue_size((queue_t *)&suspended_queue) > 0){
-      if(aux->suspended == curr_task->id){
-        aux->suspended = 0;
-        aux->request_join = exitCode;
-        queue_remove((queue_t **)&suspended_queue, (queue_t *)aux);
-        queue_append((queue_t **)&task_queue, (queue_t *)aux);
-      }
+  // acorda as tarefas suspensas se a task atual requisitou um join
+  if(curr_task->request_join > 0){
+
+    // varra a fila até que todas as tarefas tenham sido acordadas.
+    task_t *suspended_task = suspended_queue;
+    task_t *aux = suspended_task;
+    int n_suspended = curr_task->request_join;
+
+    // contador n_suspended armazena a quantidade de tarefas
+    // que foram suspensas pela atual tarefa.
+    while(n_suspended > 0){
       aux = aux->next;
+      if(suspended_task->suspended == curr_task->id){
+        aux = suspended_task->next;
+
+        // armazena o exitCode no request_join da tarefa acordada.
+        suspended_task->request_join = exitCode;
+
+        // tira da fila de suspensas e coloca na fila de tarefas
+        queue_remove((queue_t **)&suspended_queue, (queue_t *)suspended_task);
+        queue_append((queue_t **)&task_queue, (queue_t *)suspended_task);
+        n_suspended--;
+      }
+      suspended_task = aux;
     }
   }
   // retorne para dispatcher caso seja de usuario
